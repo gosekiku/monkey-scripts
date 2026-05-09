@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Enhancements
 // @namespace    local.youtube.enhancements
-// @version      0.7.7
-// @description  Remove YouTube thumbnails and Shorts, auto-unmute video pages, and keep iOS background playback alive.
+// @version      0.8.0
+// @description  Remove YouTube thumbnails and Shorts, auto-unmute video pages, keep iOS background playback alive, and rotate-to-landscape fake fullscreen on iOS.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
 // @grant        none
@@ -102,10 +102,40 @@
     'ytm-compact-video-renderer'
   ].join(',');
 
+  // Fake-fullscreen: bypass iOS native fullscreen (which strips our enhancements
+  // and forces the system video player UI). Instead, rotate the player to
+  // landscape via CSS and let YouTube's own controls keep handling input.
+  const FAKE_FS_STYLE_ID = 'tm-youtube-fake-fullscreen-style';
+  const FAKE_FS_PLAYER_CLASS = 'tm-youtube-fake-fullscreen-player';
+  const FAKE_FS_DOC_CLASS = 'tm-youtube-fake-fullscreen-active';
+  const FAKE_FS_EXIT_BTN_ID = 'tm-youtube-fake-fullscreen-exit';
+
+  const FULLSCREEN_BUTTON_SELECTOR = [
+    '.fullscreen-icon',
+    '.ytp-fullscreen-button',
+    '.player-controls-fullscreen-button',
+    'button[aria-label*="Fullscreen" i]',
+    'button[aria-label*="Full screen" i]',
+    '[role="button"][aria-label*="Fullscreen" i]',
+    '[role="button"][aria-label*="Full screen" i]'
+  ].join(',');
+
+  const FAKE_FS_PLAYER_FALLBACK_SELECTOR = [
+    'ytm-watch-player',
+    '#player-container-id',
+    '#player-container',
+    '#player'
+  ].join(',');
+
   let scheduled = false;
   let unmuteTimer = null;
   let backgroundResumeUntil = 0;
   let backgroundResumeTimer = null;
+  let fakeFullscreenActive = false;
+  // Set when the user dismisses fake fullscreen via the ✕ / ESC / fullscreen
+  // button. Prevents the next `playing` event from re-rotating the page on the
+  // same video. Cleared on SPA navigation so the next watch page starts fresh.
+  let fakeFullscreenSuppressed = false;
 
   function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -320,6 +350,7 @@
     video.addEventListener('loadedmetadata', maybeUnmute);
     video.addEventListener('canplay', maybeUnmute);
     video.addEventListener('playing', maybeUnmute);
+    video.addEventListener('playing', autoEnterFakeFullscreen);
     video.addEventListener('pause', () => resumeBackgroundVideo(video), true);
   }
 
@@ -352,12 +383,202 @@
     }, 250);
   }
 
+  function ensureFakeFullscreenStyles() {
+    if (document.getElementById(FAKE_FS_STYLE_ID)) return;
+
+    const style = document.createElement('style');
+    style.id = FAKE_FS_STYLE_ID;
+    // 100vh/100vw swap is the rotation trick: an element sized 100vh × 100vw
+    // becomes viewport-filling once rotated 90°. dvh/dvw override on browsers
+    // that support them (handles iOS Safari's dynamic toolbar).
+    style.textContent = `
+      html.${FAKE_FS_DOC_CLASS},
+      html.${FAKE_FS_DOC_CLASS} body {
+        overflow: hidden !important;
+        height: 100% !important;
+      }
+
+      .${FAKE_FS_PLAYER_CLASS} {
+        position: fixed !important;
+        top: 50vh !important;
+        left: 50vw !important;
+        top: 50dvh !important;
+        left: 50dvw !important;
+        width: 100vh !important;
+        height: 100vw !important;
+        width: 100dvh !important;
+        height: 100dvw !important;
+        max-width: none !important;
+        max-height: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        transform: translate(-50%, -50%) rotate(90deg) !important;
+        transform-origin: center center !important;
+        z-index: 2147483646 !important;
+        background: #000 !important;
+      }
+
+      .${FAKE_FS_PLAYER_CLASS} video {
+        width: 100% !important;
+        height: 100% !important;
+        max-width: none !important;
+        max-height: none !important;
+        object-fit: contain !important;
+        background: #000 !important;
+      }
+
+      #${FAKE_FS_EXIT_BTN_ID} {
+        position: fixed !important;
+        top: 16px !important;
+        right: 16px !important;
+        width: 44px !important;
+        height: 44px !important;
+        border-radius: 50% !important;
+        border: 0 !important;
+        background: rgba(0, 0, 0, 0.65) !important;
+        color: #fff !important;
+        font: 22px/44px -apple-system, system-ui, sans-serif !important;
+        text-align: center !important;
+        padding: 0 !important;
+        cursor: pointer !important;
+        z-index: 2147483647 !important;
+        transform: rotate(90deg) !important;
+        transform-origin: center !important;
+        -webkit-tap-highlight-color: transparent !important;
+      }
+    `;
+
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function findFakeFullscreenPlayer() {
+    const desktop = document.querySelector('#movie_player, .html5-video-player');
+    if (desktop) return desktop;
+
+    const video = document.querySelector('video');
+    if (!video) return null;
+    return video.closest(FAKE_FS_PLAYER_FALLBACK_SELECTOR) || video.parentElement;
+  }
+
+  function ensureExitButton() {
+    let btn = document.getElementById(FAKE_FS_EXIT_BTN_ID);
+    if (btn) return btn;
+
+    btn = document.createElement('button');
+    btn.id = FAKE_FS_EXIT_BTN_ID;
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Exit fake fullscreen');
+    btn.textContent = '✕';
+    btn.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      exitFakeFullscreen({ suppress: true });
+    }, true);
+
+    (document.body || document.documentElement).appendChild(btn);
+    return btn;
+  }
+
+  function removeExitButton() {
+    const btn = document.getElementById(FAKE_FS_EXIT_BTN_ID);
+    if (btn) btn.remove();
+  }
+
+  function applyFakeFullscreenClass() {
+    if (!fakeFullscreenActive) return;
+    const player = findFakeFullscreenPlayer();
+    if (!player) return;
+
+    document.querySelectorAll('.' + FAKE_FS_PLAYER_CLASS).forEach(el => {
+      if (el !== player) el.classList.remove(FAKE_FS_PLAYER_CLASS);
+    });
+    player.classList.add(FAKE_FS_PLAYER_CLASS);
+  }
+
+  function enterFakeFullscreen() {
+    if (fakeFullscreenActive) return;
+    ensureFakeFullscreenStyles();
+    fakeFullscreenActive = true;
+    document.documentElement.classList.add(FAKE_FS_DOC_CLASS);
+    applyFakeFullscreenClass();
+    ensureExitButton();
+  }
+
+  function exitFakeFullscreen({ suppress = false } = {}) {
+    if (suppress) fakeFullscreenSuppressed = true;
+    if (!fakeFullscreenActive) return;
+    fakeFullscreenActive = false;
+    document.documentElement.classList.remove(FAKE_FS_DOC_CLASS);
+    document.querySelectorAll('.' + FAKE_FS_PLAYER_CLASS).forEach(el => {
+      el.classList.remove(FAKE_FS_PLAYER_CLASS);
+    });
+    removeExitButton();
+  }
+
+  function autoEnterFakeFullscreen() {
+    if (!IS_IOS) return;
+    if (fakeFullscreenActive || fakeFullscreenSuppressed) return;
+    if (!isVideoPage()) return;
+    enterFakeFullscreen();
+  }
+
+  function handleFullscreenButtonClick(event) {
+    if (!(event.target instanceof Element)) return;
+    const target = event.target.closest(FULLSCREEN_BUTTON_SELECTOR);
+    if (!target) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    if (fakeFullscreenActive) {
+      // Treat tapping the fullscreen control as a user dismissal — they're
+      // explicitly saying "out of fullscreen", so don't auto-re-rotate.
+      exitFakeFullscreen({ suppress: true });
+    } else {
+      // Manual enter implies user wants it; clear any prior dismissal.
+      fakeFullscreenSuppressed = false;
+      enterFakeFullscreen();
+    }
+  }
+
+  function patchFullscreenAPIs() {
+    // YouTube's mobile player sometimes calls webkitEnterFullscreen() directly
+    // on the <video>, bypassing the fullscreen button entirely. Redirect it.
+    if (typeof HTMLVideoElement === 'undefined') return;
+    const proto = HTMLVideoElement.prototype;
+
+    if (typeof proto.webkitEnterFullscreen === 'function') {
+      overrideMethod(proto, 'webkitEnterFullscreen', function () {
+        enterFakeFullscreen();
+      });
+    }
+    if (typeof proto.requestFullscreen === 'function') {
+      overrideMethod(proto, 'requestFullscreen', function () {
+        enterFakeFullscreen();
+        return Promise.resolve();
+      });
+    }
+  }
+
+  function installFakeFullscreen() {
+    if (!IS_IOS) return;
+    ensureFakeFullscreenStyles();
+    patchFullscreenAPIs();
+    document.addEventListener('click', handleFullscreenButtonClick, true);
+    window.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && fakeFullscreenActive) {
+        exitFakeFullscreen({ suppress: true });
+      }
+    });
+  }
+
   function runEnhancements() {
     ensureStyles();
     disableThumbnails();
     hideShortsTabs();
     hookVideos();
     unmuteCurrentVideo();
+    applyFakeFullscreenClass();
   }
 
   function scheduleEnhancements() {
@@ -371,6 +592,9 @@
   }
 
   function handleNavigation() {
+    if (fakeFullscreenActive) exitFakeFullscreen();
+    // Fresh page = fresh chance to auto-trigger.
+    fakeFullscreenSuppressed = false;
     if (redirectShortsToWatch()) return;
     scheduleEnhancements();
     startUnmuteWindow();
@@ -484,6 +708,7 @@
   document.addEventListener('click', blockShortsClicks, true);
 
   installBackgroundPlaybackGuards();
+  installFakeFullscreen();
   ensureStyles();
 
   if (document.body) {
