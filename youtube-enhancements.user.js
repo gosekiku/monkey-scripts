@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Enhancements
 // @namespace    local.youtube.enhancements
-// @version      0.8.1
+// @version      0.8.2
 // @description  Remove YouTube thumbnails and Shorts, auto-unmute video pages, keep iOS background playback alive, and rotate-to-landscape fake fullscreen on iOS (manual trigger).
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -103,13 +103,15 @@
   ].join(',');
 
   // Fake-fullscreen: bypass iOS native fullscreen (which strips our enhancements
-  // and forces the system video player UI). Rotate the <video> element itself
-  // to landscape via CSS, paint a black backdrop over the page, and stack an
-  // exit button on top. Targeting the video directly avoids fighting YouTube's
-  // player JS, which sets explicit pixel dimensions on the <video> and won't
-  // recompute them when an outside script resizes a wrapping container.
+  // and forces the system video player UI). Move the <video> into our own
+  // wrapper appended to <body>, then rotate the wrapper. Two iOS pitfalls
+  // motivate the reparent: (1) `position: fixed` is scoped to the nearest
+  // transformed ancestor, and YouTube has plenty of those — leaving the video
+  // in-place puts the rotated element off-screen even though audio plays;
+  // (2) iOS Safari's compositor occasionally drops CSS transforms applied
+  // directly to <video>, so we transform a div wrapper instead.
   const FAKE_FS_STYLE_ID = 'tm-youtube-fake-fullscreen-style';
-  const FAKE_FS_VIDEO_CLASS = 'tm-youtube-fake-fullscreen-video';
+  const FAKE_FS_WRAPPER_ID = 'tm-youtube-fake-fullscreen-wrapper';
   const FAKE_FS_DOC_CLASS = 'tm-youtube-fake-fullscreen-active';
   const FAKE_FS_BACKDROP_ID = 'tm-youtube-fake-fullscreen-backdrop';
   const FAKE_FS_EXIT_BTN_ID = 'tm-youtube-fake-fullscreen-exit';
@@ -129,6 +131,9 @@
   let backgroundResumeUntil = 0;
   let backgroundResumeTimer = null;
   let fakeFullscreenActive = false;
+  // { video, placeholder, wrapper } — captured on enter so exit can put the
+  // video back exactly where YouTube had it. Placeholder is a comment node.
+  let fakeFullscreenOrigin = null;
 
   function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -380,9 +385,11 @@
 
     const style = document.createElement('style');
     style.id = FAKE_FS_STYLE_ID;
-    // We rotate the <video> directly. The 100vh × 100vw box becomes
-    // viewport-filling once rotated 90°. dvh/dvw override on browsers
-    // that support them (handles iOS Safari's dynamic toolbar).
+    // The wrapper carries the rotation. Wrapper is appended to <body>, so
+    // it has no transformed ancestor — `position: fixed` resolves to the
+    // viewport. Video inside is a plain block sized to fill the wrapper;
+    // the inline `width`/`height`/`top`/`left` YouTube sets on the <video>
+    // are explicitly cleared so they don't fight our flex/fill rules.
     style.textContent = `
       html.${FAKE_FS_DOC_CLASS},
       html.${FAKE_FS_DOC_CLASS} body {
@@ -396,7 +403,7 @@
         z-index: 2147483645 !important;
       }
 
-      video.${FAKE_FS_VIDEO_CLASS} {
+      #${FAKE_FS_WRAPPER_ID} {
         position: fixed !important;
         top: 50vh !important;
         left: 50vw !important;
@@ -412,9 +419,27 @@
         padding: 0 !important;
         transform: translate(-50%, -50%) rotate(90deg) !important;
         transform-origin: center center !important;
-        object-fit: contain !important;
         background: #000 !important;
         z-index: 2147483646 !important;
+        overflow: hidden !important;
+      }
+
+      #${FAKE_FS_WRAPPER_ID} video {
+        display: block !important;
+        position: static !important;
+        top: auto !important;
+        left: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: none !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-width: none !important;
+        max-height: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        object-fit: contain !important;
+        background: #000 !important;
       }
 
       #${FAKE_FS_EXIT_BTN_ID} {
@@ -480,27 +505,31 @@
     if (btn) btn.remove();
   }
 
-  function applyFakeFullscreenClass() {
-    if (!fakeFullscreenActive) return;
-    const video = getActiveVideo();
-    if (!video) return;
-
-    document.querySelectorAll('video.' + FAKE_FS_VIDEO_CLASS).forEach(el => {
-      if (el !== video) el.classList.remove(FAKE_FS_VIDEO_CLASS);
-    });
-    video.classList.add(FAKE_FS_VIDEO_CLASS);
-  }
-
   function enterFakeFullscreen() {
     if (fakeFullscreenActive) return;
     const video = getActiveVideo();
-    if (!video) return;
+    if (!video || !video.parentNode || !document.body) return;
 
     ensureFakeFullscreenStyles();
     fakeFullscreenActive = true;
     document.documentElement.classList.add(FAKE_FS_DOC_CLASS);
     ensureBackdrop();
-    video.classList.add(FAKE_FS_VIDEO_CLASS);
+
+    const wasPlaying = !video.paused;
+    const placeholder = document.createComment('tm-yt-fakefs');
+    video.parentNode.insertBefore(placeholder, video);
+
+    const wrapper = document.createElement('div');
+    wrapper.id = FAKE_FS_WRAPPER_ID;
+    wrapper.appendChild(video);
+    document.body.appendChild(wrapper);
+
+    fakeFullscreenOrigin = { video, placeholder, wrapper };
+
+    // Reparenting briefly detaches the <video>; some iOS Safari builds pause
+    // it. Resume immediately to keep playback continuous.
+    if (wasPlaying && video.paused) playVideo(video);
+
     ensureExitButton();
   }
 
@@ -508,9 +537,19 @@
     if (!fakeFullscreenActive) return;
     fakeFullscreenActive = false;
     document.documentElement.classList.remove(FAKE_FS_DOC_CLASS);
-    document.querySelectorAll('video.' + FAKE_FS_VIDEO_CLASS).forEach(el => {
-      el.classList.remove(FAKE_FS_VIDEO_CLASS);
-    });
+
+    if (fakeFullscreenOrigin) {
+      const { video, placeholder, wrapper } = fakeFullscreenOrigin;
+      const wasPlaying = !video.paused;
+      if (placeholder.parentNode) {
+        placeholder.parentNode.insertBefore(video, placeholder);
+        placeholder.remove();
+      }
+      if (wrapper.parentNode) wrapper.remove();
+      fakeFullscreenOrigin = null;
+      if (wasPlaying && video.paused) playVideo(video);
+    }
+
     removeBackdrop();
     removeExitButton();
   }
@@ -565,7 +604,6 @@
     hideShortsTabs();
     hookVideos();
     unmuteCurrentVideo();
-    applyFakeFullscreenClass();
   }
 
   function scheduleEnhancements() {
