@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Share Sheet
 // @namespace    local.x.share-sheet
-// @version      1.0.0
+// @version      1.0.1
 // @description  Adds an "Open share sheet…" button to X/Twitter's share menu that triggers iOS native share with post text and URL.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -175,8 +175,27 @@
     navigator.clipboard.writeText(t).then(function () {}).catch(function () {});
   }
 
-  var observer = new MutationObserver(function () { scanMenus(); });
+  // === DIAGNOSTIC VISUAL MARKER ===
+  // Adds a "⇧📋" badge after usernames so you can tell the script is loaded.
+  function markAuthors() {
+    var names = document.querySelectorAll('[data-testid="User-Name"]');
+    for (var i = 0; i < names.length; i++) {
+      var el = names[i];
+      if (el.querySelector('[data-ss-marker]')) continue;
+      var badge = document.createElement('span');
+      badge.setAttribute('data-ss-marker', '1');
+      badge.textContent = ' ⇧📋';
+      badge.style.cssText = 'font-size:11px;color:#1d9bf0;vertical-align:middle';
+      el.appendChild(badge);
+    }
+  }
+
+  var observer = new MutationObserver(function () {
+    scanMenus();
+    markAuthors();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   scanMenus();
+  markAuthors();
   console.info(TAG, 'ready');
 })();
