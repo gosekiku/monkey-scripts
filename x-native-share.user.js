@@ -32,7 +32,13 @@
       for (const node of path) {
         if (!(node instanceof Element)) continue;
         if (isShareTrigger(node)) {
-          context.article = node.closest('article');
+          // On /status/ pages the focal post is wrapped in <article>. On
+          // /article/ pages it's a <div data-testid="twitterArticleReadView">
+          // with no <article> tag, so try both.
+          context.article =
+            node.closest('article') ||
+            node.closest('[data-testid="twitterArticleReadView"]') ||
+            null;
           context.url = location.href;
           context.at = Date.now();
           return;
@@ -143,18 +149,24 @@
     if (context.article && context.article.isConnected && Date.now() - context.at < 5000) {
       return context.article;
     }
-    // On dedicated /status/<id> or /article/<id> pages there's usually a
-    // focused article with tabindex="-1". Fall back to the first <article>.
+    // /article/<id> pages: the share button sits in a top toolbar that's not
+    // a descendant of the read view, so closest() yielded nothing. Resolve
+    // the body container directly from the page URL.
+    if (/\/article\/\d+/.test(location.pathname)) {
+      const readView = document.querySelector('[data-testid="twitterArticleReadView"]');
+      if (readView) return readView;
+    }
+    // /status/<id> pages: the focused tweet has tabindex="-1".
     return document.querySelector('article[tabindex="-1"]') || document.querySelector('article');
   }
 
-  function extractText(article) {
-    if (!article) return '';
+  function extractText(container) {
+    if (!container) return '';
 
-    // Standard tweet body. Multiple nodes appear when the post quotes another
-    // tweet; join with a blank line so the quoted body reads as its own
-    // paragraph in the share sheet.
-    const tweetTexts = article.querySelectorAll('[data-testid="tweetText"]');
+    // 1. Tweets — multiple [data-testid="tweetText"] nodes appear when the
+    //    post quotes another tweet; join with a blank line so the quoted body
+    //    reads as its own paragraph.
+    const tweetTexts = container.querySelectorAll('[data-testid="tweetText"]');
     if (tweetTexts.length > 0) {
       return Array.from(tweetTexts)
         .map((el) => el.innerText.trim())
@@ -162,22 +174,34 @@
         .join('\n\n');
     }
 
-    // Long-form X Articles use a different layout. Sweep the article for
-    // anything paragraph-shaped and stitch it together.
-    const paras = article.querySelectorAll('h1, h2, h3, p, [data-testid="article-content"] *');
-    if (paras.length > 0) {
-      const seen = new Set();
-      const lines = [];
-      for (const el of paras) {
-        const t = el.innerText && el.innerText.trim();
-        if (!t || seen.has(t)) continue;
-        seen.add(t);
-        lines.push(t);
-      }
-      if (lines.length > 0) return lines.join('\n\n');
+    // 2. Long-form X Articles — the rich-text view holds the body, the title
+    //    is a sibling under the read view. Verified against kepano/defuddle
+    //    and koredeycode/x-articles-exporter.
+    const richTextView =
+      container.querySelector('[data-testid="twitterArticleRichTextView"]') ||
+      document.querySelector('[data-testid="twitterArticleRichTextView"]');
+    if (richTextView) {
+      const titleEl =
+        container.querySelector('[data-testid="twitter-article-title"]') ||
+        document.querySelector('[data-testid="twitter-article-title"]');
+      const title = titleEl ? titleEl.innerText.trim() : '';
+      const body = (richTextView.innerText || '').trim();
+      const combined = [title, body].filter(Boolean).join('\n\n');
+      if (combined) return combined;
     }
 
-    return (article.innerText || '').trim();
+    // 3. DraftJS fallback — if X renames the rich-text testid, the body still
+    //    renders into a DraftEditor surface.
+    const editor =
+      container.querySelector('.DraftEditor-editorContainer') ||
+      document.querySelector('.DraftEditor-editorContainer');
+    if (editor) {
+      const body = (editor.innerText || '').trim();
+      if (body) return body;
+    }
+
+    // 4. Last resort — whatever text the container itself yields.
+    return (container.innerText || '').trim();
   }
 
   function extractAuthor(article) {
