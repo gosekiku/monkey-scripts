@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         X Native Share
 // @namespace    local.x.native-share
-// @version      0.1.0
-// @description  Adds a "Share via system…" entry to X/Twitter's share dropdown that opens the OS share sheet (iOS Safari) with the post text and URL.
+// @version      0.2.0
+// @description  Adds an "Open share sheet…" entry to X/Twitter's share dropdown that opens the OS share sheet (iOS Safari) with the post text and URL.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @match        https://*.twitter.com/*
@@ -13,7 +13,9 @@
 (function () {
   'use strict';
 
+  const TAG = '[x-native-share]';
   const MARKER_ATTR = 'data-tm-x-native-share';
+  console.info(TAG, 'script loaded, version 0.2.0');
 
   // Track which post's share button was last clicked. The dropdown renders in
   // a portal with no DOM link back to the post, so we cache the owning
@@ -59,30 +61,60 @@
   // Continuously scan for share dropdowns. React may re-render the menu while
   // it's open, so a single addedNodes check isn't enough — we re-inject any
   // time our marker is missing from a live dropdown.
-  const observer = new MutationObserver(() => {
-    for (const dropdown of document.querySelectorAll('[data-testid="Dropdown"]')) {
-      if (!dropdown.querySelector(`[${MARKER_ATTR}]`)) injectMenuItem(dropdown);
+  function scanDropdowns() {
+    const dropdowns = document.querySelectorAll('[data-testid="Dropdown"]');
+    for (const dropdown of dropdowns) {
+      if (dropdown.querySelector(`[${MARKER_ATTR}]`)) continue;
+      try {
+        injectMenuItem(dropdown);
+      } catch (err) {
+        console.warn(TAG, 'injection failed:', err);
+      }
     }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  const observer = new MutationObserver(scanDropdowns);
+  // Observe documentElement rather than body — some runners attach the script
+  // before body's subtree is stable, and X may render popovers into a portal
+  // that briefly sits outside body during animation.
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  // Initial sweep in case a dropdown is already open when the script loads.
+  scanDropdowns();
+  console.info(TAG, 'observer attached');
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
 
   function injectMenuItem(dropdown) {
     const template = dropdown.querySelector('[role="menuitem"]');
-    if (!template) return;
+    if (!template) {
+      console.info(TAG, 'dropdown found but no menuitem template yet — waiting');
+      return;
+    }
 
     const item = template.cloneNode(true);
     item.setAttribute(MARKER_ATTR, '1');
 
+    // Replace the cloned SVG's contents using the SVG namespace. Setting
+    // innerHTML on an <svg> has worked in modern browsers for years, but
+    // historical Safari quirks make namespaced construction the safer path.
     const svg = item.querySelector('svg');
     if (svg) {
-      // iOS-style share glyph: square box with an upward arrow rising out of
-      // it. Distinct from X's existing "Share post via …" up-arrow.
-      svg.innerHTML =
-        '<g><path d="M12 2 8 6h3v10h2V6h3l-4-4zM20 8h-4v2h4v10H4V10h4V8H4c-1.1 0-2 .9-2 2v10c0 1.1.89 2 2 2h16c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2z"/></g>';
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      const g = document.createElementNS(SVG_NS, 'g');
+      const path = document.createElementNS(SVG_NS, 'path');
+      // iOS-style share glyph: square box with an upward arrow rising out.
+      path.setAttribute(
+        'd',
+        'M12 2 8 6h3v10h2V6h3l-4-4zM20 8h-4v2h4v10H4V10h4V8H4c-1.1 0-2 .9-2 2v10c0 1.1.89 2 2 2h16c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2z',
+      );
+      g.appendChild(path);
+      svg.appendChild(g);
     }
 
+    // Use a label that doesn't share a prefix with X's "Share post via …" so
+    // it's obvious in the menu (and obvious in screenshots if it's missing).
     const label = item.querySelector('span');
-    if (label) label.textContent = 'Share via system…';
+    if (label) label.textContent = 'Open share sheet…';
 
     item.addEventListener('click', onMenuItemClick, true);
     item.addEventListener('keydown', (event) => {
@@ -90,6 +122,7 @@
     }, true);
 
     dropdown.insertBefore(item, dropdown.firstElementChild);
+    console.info(TAG, 'menu item injected into dropdown');
   }
 
   function onMenuItemClick(event) {
@@ -101,6 +134,11 @@
     event.stopImmediatePropagation();
 
     const data = buildShareData();
+    console.info(TAG, 'menu item clicked; share payload:', {
+      title: data.title,
+      textChars: data.text ? data.text.length : 0,
+      url: data.url,
+    });
 
     // Close the dropdown — Escape is what X's menu listens for. We do this
     // before .share() so the menu disappears as the iOS share sheet animates
