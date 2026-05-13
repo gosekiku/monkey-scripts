@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Native Share
 // @namespace    local.x.native-share
-// @version      0.3.0
+// @version      0.3.1
 // @description  Adds an "Open share sheet…" entry to X/Twitter's share menu that opens the OS share sheet (iOS Safari) with the post text and URL.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
