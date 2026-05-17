@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Native Share Button
 // @namespace    local.x.native-share-button
-// @version      1.1.2
+// @version      1.1.3
 // @description  Adds an inline native share button to X/Twitter posts and articles, sharing the post text and canonical URL through the OS share sheet.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -19,7 +19,7 @@
   var SCAN_DELAY_MS = 80;
   var scanTimer = null;
 
-  console.info(TAG, 'v1.1.2 ready');
+  console.info(TAG, 'v1.1.3 ready');
 
   function scheduleScan() {
     if (scanTimer !== null) return;
@@ -43,13 +43,15 @@
     if (!isShareTrigger(shareButton)) return;
 
     var article = findArticleForButton(shareButton);
+    if (!article) return;
+
     var scope = article || shareButton.parentElement || document;
     var insertionPoint = findActionWrapper(shareButton);
     if (!insertionPoint || !insertionPoint.parentNode) return;
 
     if (scope.querySelector('[' + BUTTON_ATTR + ']')) return;
 
-    var nativeButton = createNativeShareButton(shareButton, article);
+    var nativeButton = createNativeShareButton(shareButton, insertionPoint, article);
     insertionPoint.parentNode.insertBefore(nativeButton, insertionPoint.nextSibling);
   }
 
@@ -90,17 +92,22 @@
     if (!(node instanceof Element)) return false;
     if (node.matches('[role="button"], button')) return false;
 
-    var childButton = node.querySelector('button, [role="button"]');
-    if (!childButton) return false;
+    if (countInteractiveControls(node) !== 1) return false;
 
     var text = (node.innerText || '').trim();
     return text.length < 32;
   }
 
-  function createNativeShareButton(templateButton, article) {
-    var wrapper = templateButton.closest('div') || templateButton;
-    var clone = wrapper.cloneNode(true);
-    var button = clone.matches('button, [role="button"]') ? clone : clone.querySelector('button, [role="button"]');
+  function countInteractiveControls(root) {
+    if (!(root instanceof Element)) return 0;
+
+    var controls = root.querySelectorAll('button, [role="button"]');
+    return (root.matches('button, [role="button"]') ? 1 : 0) + controls.length;
+  }
+
+  function createNativeShareButton(templateButton, templateWrapper, article) {
+    var clone = templateWrapper.cloneNode(true);
+    var button = clone.matches('button, [role="button"]') ? clone : findShareControl(clone) || clone.querySelector('button, [role="button"]');
 
     clone.setAttribute(BUTTON_ATTR, '1');
     clone.setAttribute('data-testid', 'nativeShare');
@@ -110,6 +117,7 @@
       clone.appendChild(button);
     }
 
+    removeExtraControls(clone, button);
     resetInteractiveState(clone);
     button.setAttribute('aria-label', BUTTON_LABEL);
     button.setAttribute('title', BUTTON_LABEL);
@@ -129,6 +137,28 @@
     }, true);
 
     return clone;
+  }
+
+  function findShareControl(root) {
+    if (!(root instanceof Element)) return null;
+    if (isShareTrigger(root)) return root;
+
+    var controls = root.querySelectorAll('button, [role="button"]');
+    for (var i = 0; i < controls.length; i++) {
+      if (isShareTrigger(controls[i])) return controls[i];
+    }
+
+    return null;
+  }
+
+  function removeExtraControls(root, primaryControl) {
+    var controls = root.querySelectorAll('button, [role="button"]');
+
+    for (var i = 0; i < controls.length; i++) {
+      var control = controls[i];
+      if (control === primaryControl || control.contains(primaryControl) || primaryControl.contains(control)) continue;
+      control.remove();
+    }
   }
 
   function resetInteractiveState(root) {
