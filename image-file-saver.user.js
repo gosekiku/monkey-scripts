@@ -1,10 +1,14 @@
 // ==UserScript==
 // @name         Image File Saver
 // @namespace    local.image-file-saver
-// @version      0.2.4
+// @version      0.2.5
 // @description  Adds an upper-right Save button to web images so iPhone Safari can save/share them as image files instead of only adding them to Photos.
 // @match        https://*/*
 // @match        http://*/*
+// @exclude      https://youtube.com/*
+// @exclude      https://*.youtube.com/*
+// @exclude      https://youtu.be/*
+// @exclude      https://*.youtu.be/*
 // @grant        GM_download
 // @grant        GM.download
 // @run-at       document-idle
@@ -27,6 +31,8 @@
   const toastTimers = new WeakMap();
   let scanScheduled = false;
 
+  if (isExcludedSite()) return;
+
   injectStyles();
   start();
 
@@ -43,6 +49,10 @@
 
     window.addEventListener('load', scheduleScan, { once: true });
     window.addEventListener('resize', scheduleScan, { passive: true });
+  }
+
+  function isExcludedSite() {
+    return /(^|\.)youtube\.com$/i.test(location.hostname) || /(^|\.)youtu\.be$/i.test(location.hostname);
   }
 
   function scheduleScan() {
