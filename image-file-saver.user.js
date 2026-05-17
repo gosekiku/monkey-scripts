@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image File Saver
 // @namespace    local.image-file-saver
-// @version      0.2.0
+// @version      0.2.1
 // @description  Adds an upper-right Save button to web images so iPhone Safari can save/share them as image files instead of only adding them to Photos.
 // @match        https://*/*
 // @match        http://*/*
@@ -170,8 +170,15 @@
     } catch (error) {
       console.warn(TAG, 'save failed:', error);
       flashButton(button, 'error');
-      showToast(host, 'Save failed: ' + (error?.message || error), 'error');
-      fallbackOpen(url);
+      try {
+        await shareUrl(url);
+        flashButton(button, 'done');
+        showToast(host, 'Shared image URL.', 'done');
+      } catch (shareError) {
+        console.warn(TAG, 'URL share fallback failed:', shareError);
+        showToast(host, 'Save failed: ' + (error?.message || error), 'error');
+        fallbackOpen(url);
+      }
     } finally {
       button.classList.remove(BUTTON_CLASS + '--busy');
     }
@@ -199,12 +206,27 @@
       return;
     }
 
-    if (navigator.canShare && navigator.canShare({ files: [file] }) && typeof navigator.share === 'function') {
+    if (typeof navigator.share === 'function' && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
       await navigator.share({ files: [file], title: file.name });
       return;
     }
 
-    downloadBlob(file);
+    try {
+      await shareUrl(sourceUrl);
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      downloadBlob(file);
+    }
+  }
+
+  async function shareUrl(url) {
+    if (typeof navigator.share !== 'function') {
+      throw new Error('navigator.share unavailable');
+    }
+    await navigator.share({
+      title: 'Image',
+      url: normalizeImageUrl(url)
+    });
   }
 
   function gmDownloadFile(gmDownload, url, name) {
