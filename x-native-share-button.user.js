@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         X Share Sheet
-// @namespace    local.x.share-sheet
-// @version      1.0.1
-// @description  Adds an "Open share sheet…" button to X/Twitter's share menu that triggers iOS native share with post text and URL.
+// @name         X Native Share Button
+// @namespace    local.x.native-share-button
+// @version      1.1.0
+// @description  Adds an inline native share button to X/Twitter posts and articles, sharing the post text and canonical URL through the OS share sheet.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @match        https://*.twitter.com/*
@@ -13,189 +13,372 @@
 (function () {
   'use strict';
 
-  var TAG = '[x-share-sheet]';
-  var MARKER_ATTR = 'data-tm-x-share-sheet';
-  console.info(TAG, 'v1.0.0');
+  var TAG = '[x-native-share-button]';
+  var BUTTON_ATTR = 'data-tm-x-native-share-button';
+  var BUTTON_LABEL = 'Native share';
+  var SCAN_DELAY_MS = 80;
+  var scanTimer = null;
 
-  var context = { article: null, url: '', at: 0 };
+  console.info(TAG, 'v1.1.0 ready');
 
-  // Capture share button clicks before React handles them
-  document.addEventListener('click', function (event) {
-    var path = event.composedPath ? event.composedPath() : [event.target];
-    for (var i = 0; i < path.length; i++) {
-      var node = path[i];
-      if (!(node instanceof Element)) continue;
-      if (isShareTrigger(node)) {
-        context.article =
-          node.closest('article') ||
-          node.closest('[data-testid="twitterArticleReadView"]') ||
-          null;
-        context.url = location.href;
-        context.at = Date.now();
-        return;
-      }
+  function scheduleScan() {
+    if (scanTimer !== null) return;
+    scanTimer = window.setTimeout(function () {
+      scanTimer = null;
+      scan();
+    }, SCAN_DELAY_MS);
+  }
+
+  function scan() {
+    var shareButtons = document.querySelectorAll('button, [role="button"]');
+
+    for (var i = 0; i < shareButtons.length; i++) {
+      injectForShareButton(shareButtons[i]);
     }
-  }, true);
+  }
+
+  function injectForShareButton(shareButton) {
+    if (!(shareButton instanceof Element)) return;
+    if (shareButton.closest('[' + BUTTON_ATTR + ']')) return;
+    if (!isShareTrigger(shareButton)) return;
+
+    var article = findArticleForButton(shareButton);
+    var scope = article || shareButton.parentElement || document;
+    var insertionPoint = findActionWrapper(shareButton);
+    if (!insertionPoint || !insertionPoint.parentNode) return;
+
+    var existing = scope.querySelector('[' + BUTTON_ATTR + ']');
+    if (existing && existing.parentNode === insertionPoint.parentNode) return;
+
+    var nativeButton = createNativeShareButton(shareButton, article);
+    insertionPoint.parentNode.insertBefore(nativeButton, insertionPoint.nextSibling);
+  }
+
+  function findArticleForButton(button) {
+    var article = button.closest('article');
+    if (article) return article;
+
+    var readView = document.querySelector('[data-testid="twitterArticleReadView"]');
+    if (readView) return readView;
+
+    return null;
+  }
 
   function isShareTrigger(node) {
-    if (!node.matches) return false;
-    if (node.matches('button[aria-label="Share post" i], button[aria-label*="share post" i]')) return true;
-    if (node.matches('[data-testid="share"], [data-testid="Share"]')) return true;
-    return false;
+    if (!node || !node.matches) return false;
+
+    var testId = (node.getAttribute('data-testid') || '').toLowerCase();
+    if (testId === 'share') return true;
+
+    var label = (node.getAttribute('aria-label') || node.getAttribute('title') || '').toLowerCase();
+    return label.indexOf('share') !== -1;
   }
 
-  function scanMenus() {
-    scanContainer('[role="menu"]');
-    scanContainer('[data-testid="Dropdown"]');
-  }
+  function findActionWrapper(button) {
+    var node = button;
 
-  function scanContainer(selector) {
-    var containers = document.querySelectorAll(selector);
-    for (var i = 0; i < containers.length; i++) {
-      tryInject(containers[i]);
-    }
-  }
-
-  function tryInject(container) {
-    if (container.querySelector('[' + MARKER_ATTR + ']')) return;
-
-    var template = container.querySelector('[role="menuitem"]');
-    if (!template) return;
-
-    var item = template.cloneNode(true);
-    item.setAttribute(MARKER_ATTR, '1');
-
-    // Replace SVG icon with share icon
-    var svg = item.querySelector('svg');
-    if (svg) {
-      while (svg.firstChild) svg.removeChild(svg.firstChild);
-      var ns = 'http://www.w3.org/2000/svg';
-      var g = document.createElementNS(ns, 'g');
-      var path = document.createElementNS(ns, 'path');
-      path.setAttribute('d', 'M12 2 8 6h3v10h2V6h3l-4-4zM20 8h-4v2h4v10H4V10h4V8H4c-1.1 0-2 .9-2 2v10c0 1.1.89 2 2 2h16c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2z');
-      g.appendChild(path);
-      svg.appendChild(g);
+    for (var depth = 0; node && depth < 4; depth++) {
+      if (node.parentElement && looksLikeActionWrapper(node.parentElement)) {
+        return node.parentElement;
+      }
+      node = node.parentElement;
     }
 
-    var label = item.querySelector('span');
-    if (label) label.textContent = 'Open share sheet…';
+    return button;
+  }
 
-    item.addEventListener('click', onMenuItemClick, true);
-    item.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') onMenuItemClick(e);
+  function looksLikeActionWrapper(node) {
+    if (!(node instanceof Element)) return false;
+    if (node.matches('[role="button"], button')) return false;
+
+    var childButton = node.querySelector('button, [role="button"]');
+    if (!childButton) return false;
+
+    var text = (node.innerText || '').trim();
+    return text.length < 32;
+  }
+
+  function createNativeShareButton(templateButton, article) {
+    var wrapper = templateButton.closest('div') || templateButton;
+    var clone = wrapper.cloneNode(true);
+    var button = clone.matches('button, [role="button"]') ? clone : clone.querySelector('button, [role="button"]');
+
+    clone.setAttribute(BUTTON_ATTR, '1');
+    clone.setAttribute('data-testid', 'nativeShare');
+
+    if (!button) {
+      button = document.createElement('button');
+      clone.appendChild(button);
+    }
+
+    resetInteractiveState(clone);
+    button.setAttribute('aria-label', BUTTON_LABEL);
+    button.setAttribute('title', BUTTON_LABEL);
+    button.setAttribute('type', 'button');
+
+    replaceIcon(clone);
+    replaceVisibleText(clone);
+
+    clone.addEventListener('click', function (event) {
+      onNativeShareClick(event, article);
     }, true);
 
-    container.insertBefore(item, container.firstElementChild);
-    console.info(TAG, 'injected');
+    clone.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' || event.key === ' ') {
+        onNativeShareClick(event, article);
+      }
+    }, true);
+
+    return clone;
   }
 
-  function onMenuItemClick(event) {
+  function resetInteractiveState(root) {
+    var nodes = root.querySelectorAll('[id], [aria-expanded], [aria-haspopup], [data-testid]');
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].removeAttribute('id');
+      nodes[i].removeAttribute('aria-expanded');
+      nodes[i].removeAttribute('aria-haspopup');
+      if (nodes[i].getAttribute('data-testid') !== 'nativeShare') {
+        nodes[i].removeAttribute('data-testid');
+      }
+    }
+  }
+
+  function replaceIcon(root) {
+    var svg = root.querySelector('svg');
+    if (!svg) return;
+
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    var ns = 'http://www.w3.org/2000/svg';
+    var path = document.createElementNS(ns, 'path');
+    path.setAttribute('fill', 'currentColor');
+    path.setAttribute('d', 'M12 3.25 7.75 7.5l1.06 1.06 2.44-2.44V15h1.5V6.12l2.44 2.44 1.06-1.06L12 3.25ZM5 11h3v1.5H5.5v6h13v-6H16V11h3a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z');
+    svg.appendChild(path);
+  }
+
+  function replaceVisibleText(root) {
+    var spans = root.querySelectorAll('span');
+
+    for (var i = 0; i < spans.length; i++) {
+      var text = (spans[i].textContent || '').trim();
+      if (!text || /^share$/i.test(text) || /^\d+[KMB]?$/.test(text)) {
+        spans[i].textContent = '';
+      }
+    }
+  }
+
+  function onNativeShareClick(event, article) {
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
 
-    var data = buildShareData();
-    console.info(TAG, 'share:', data.title, '(' + data.text.length + ' chars)');
+    var shareData = buildShareData(article);
+    console.info(TAG, 'sharing', shareData);
 
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-
-    if (typeof navigator.share === 'function') {
-      navigator.share(data).catch(function (err) {
+    if (typeof navigator.share === 'function' && canShare(shareData)) {
+      navigator.share(shareData).catch(function (err) {
         if (err && err.name !== 'AbortError') {
-          console.warn(TAG, 'share failed:', err);
-          fallbackCopy(data);
+          console.warn(TAG, 'native share failed, falling back to clipboard', err);
+          fallbackCopy(shareData);
         }
       });
-    } else {
-      fallbackCopy(data);
+      return;
+    }
+
+    fallbackCopy(shareData);
+  }
+
+  function canShare(shareData) {
+    if (typeof navigator.canShare !== 'function') return true;
+
+    try {
+      return navigator.canShare(shareData);
+    } catch (err) {
+      return false;
     }
   }
 
-  function buildShareData() {
-    var article = pickArticle();
-    var text = extractText(article);
-    var author = extractAuthor(article);
-    var url = resolvePostUrl(article) || (Date.now() - context.at < 5000 ? context.url : location.href);
-    var body = text ? text + '\n\n' + url : url;
-    return { title: author || 'X post', text: body, url: url };
+  function buildShareData(article) {
+    var currentArticle = article && article.isConnected ? article : pickArticle();
+    var text = cleanText(extractText(currentArticle));
+    var author = cleanText(extractAuthor(currentArticle));
+    var url = resolvePostUrl(currentArticle) || stripTracking(location.href);
+    var title = author || getArticleTitle() || 'X post';
+
+    return {
+      title: title,
+      text: text ? text + '\n\n' + url : url,
+      url: url
+    };
   }
 
   function pickArticle() {
-    if (context.article && context.article.isConnected && Date.now() - context.at < 5000) {
-      return context.article;
-    }
+    var focused = document.querySelector('article[tabindex="-1"]');
+    if (focused) return focused;
+
     if (location.pathname.indexOf('/article/') !== -1) {
       return document.querySelector('[data-testid="twitterArticleReadView"]');
     }
-    return document.querySelector('article[tabindex="-1"]') || document.querySelector('article');
+
+    return document.querySelector('article');
   }
 
-  function extractText(container) {
-    if (!container) return '';
+  function extractText(article) {
+    var articleTitle = getArticleTitle();
+    var richArticle = getRichArticleText();
 
+    if (richArticle) {
+      return joinParts([articleTitle, richArticle]);
+    }
+
+    if (!article) return '';
+
+    var tweetTexts = article.querySelectorAll('[data-testid="tweetText"]');
+    if (tweetTexts.length > 0) {
+      return joinNodeText(tweetTexts);
+    }
+
+    var quotedTweetTexts = article.querySelectorAll('[data-testid="tweetText"], [data-testid="quotedTweet"] [dir="auto"]');
+    if (quotedTweetTexts.length > 0) {
+      return joinNodeText(quotedTweetTexts);
+    }
+
+    return trimUiText(article.innerText || '');
+  }
+
+  function getArticleTitle() {
+    var title = document.querySelector('[data-testid="twitter-article-title"]');
+    return title ? title.innerText : '';
+  }
+
+  function getRichArticleText() {
     var richView = document.querySelector('[data-testid="twitterArticleRichTextView"]');
-    if (richView) {
-      var titleEl = document.querySelector('[data-testid="twitter-article-title"]');
-      var title = titleEl ? titleEl.innerText.trim() : '';
-      var body = (richView.innerText || '').trim();
-      var parts = [];
-      if (title) parts.push(title);
-      if (body) parts.push(body);
-      if (parts.length > 0) return parts.join('\n\n');
-    }
-
-    var texts = container.querySelectorAll('[data-testid="tweetText"]');
-    if (texts.length > 0) {
-      return Array.from(texts).map(function (el) { return el.innerText.trim(); }).filter(Boolean).join('\n\n');
-    }
-
-    return (container.innerText || '').trim();
+    return richView ? richView.innerText : '';
   }
 
   function extractAuthor(article) {
     if (!article) return '';
-    var el = article.querySelector('[data-testid="User-Name"]');
-    return el ? el.innerText.replace(/\s+/g, ' ').trim() : '';
+
+    var userName = article.querySelector('[data-testid="User-Name"]');
+    if (!userName) return '';
+
+    return firstUsefulLine(userName.innerText || '');
   }
 
   function resolvePostUrl(article) {
-    if (!article) return '';
-    var timeEl = article.querySelector('time');
-    var link = timeEl && timeEl.closest('a[href*="/status/"], a[href*="/article/"]');
-    if (link) {
-      try { return new URL(link.getAttribute('href'), location.origin).href; } catch (e) {}
+    if (article) {
+      var links = article.querySelectorAll('a[href*="/status/"], a[href*="/article/"]');
+
+      for (var i = 0; i < links.length; i++) {
+        var href = links[i].getAttribute('href') || '';
+        if (href.indexOf('/analytics') !== -1) continue;
+
+        try {
+          var url = new URL(href, location.origin);
+          if (url.pathname.indexOf('/status/') !== -1 || url.pathname.indexOf('/article/') !== -1) {
+            return stripTracking(url.href);
+          }
+        } catch (err) {}
+      }
     }
-    if (location.pathname.indexOf('/status/') !== -1 || location.pathname.indexOf('/article/') !== -1) return location.href;
+
+    if (location.pathname.indexOf('/status/') !== -1 || location.pathname.indexOf('/article/') !== -1) {
+      return stripTracking(location.href);
+    }
+
     return '';
   }
 
-  function fallbackCopy(data) {
-    var t = data.text || data.url || '';
-    if (!t || !navigator.clipboard || !navigator.clipboard.writeText) return;
-    navigator.clipboard.writeText(t).then(function () {}).catch(function () {});
-  }
-
-  // === DIAGNOSTIC VISUAL MARKER ===
-  // Adds a "⇧📋" badge after usernames so you can tell the script is loaded.
-  function markAuthors() {
-    var names = document.querySelectorAll('[data-testid="User-Name"]');
-    for (var i = 0; i < names.length; i++) {
-      var el = names[i];
-      if (el.querySelector('[data-ss-marker]')) continue;
-      var badge = document.createElement('span');
-      badge.setAttribute('data-ss-marker', '1');
-      badge.textContent = ' ⇧📋';
-      badge.style.cssText = 'font-size:11px;color:#1d9bf0;vertical-align:middle';
-      el.appendChild(badge);
+  function stripTracking(rawUrl) {
+    try {
+      var url = new URL(rawUrl, location.origin);
+      url.search = '';
+      url.hash = '';
+      return url.href;
+    } catch (err) {
+      return rawUrl;
     }
   }
 
-  var observer = new MutationObserver(function () {
-    scanMenus();
-    markAuthors();
-  });
+  function joinNodeText(nodes) {
+    var parts = [];
+
+    for (var i = 0; i < nodes.length; i++) {
+      var text = cleanText(nodes[i].innerText || '');
+      if (text && parts.indexOf(text) === -1) parts.push(text);
+    }
+
+    return parts.join('\n\n');
+  }
+
+  function joinParts(parts) {
+    var result = [];
+
+    for (var i = 0; i < parts.length; i++) {
+      var text = cleanText(parts[i] || '');
+      if (text && result.indexOf(text) === -1) result.push(text);
+    }
+
+    return result.join('\n\n');
+  }
+
+  function cleanText(text) {
+    return (text || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n[ \t]+/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function trimUiText(text) {
+    var lines = cleanText(text).split('\n');
+    var kept = [];
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line || isUiLine(line)) continue;
+      kept.push(line);
+    }
+
+    return kept.join('\n');
+  }
+
+  function firstUsefulLine(text) {
+    var lines = cleanText(text).split('\n');
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (line && line.charAt(0) !== '@') return line;
+    }
+
+    return '';
+  }
+
+  function isUiLine(line) {
+    return /^(Reply|Repost|Quote|Like|Bookmark|Share|Views|View post analytics|Show more|Translate post)$/i.test(line) ||
+      /^\d+[,.]?\d*[KMB]?$/i.test(line);
+  }
+
+  function fallbackCopy(shareData) {
+    var text = shareData.text || shareData.url || '';
+
+    if (!text) return;
+
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(text).then(function () {
+        console.info(TAG, 'copied share text to clipboard');
+      }).catch(function (err) {
+        console.warn(TAG, 'clipboard fallback failed', err);
+      });
+    }
+  }
+
+  var observer = new MutationObserver(scheduleScan);
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  scanMenus();
-  markAuthors();
-  console.info(TAG, 'ready');
+  scan();
 })();
