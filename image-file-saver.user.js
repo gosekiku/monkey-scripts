@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image File Saver
 // @namespace    local.image-file-saver
-// @version      0.2.1
+// @version      0.2.2
 // @description  Adds an upper-right Save button to web images so iPhone Safari can save/share them as image files instead of only adding them to Photos.
 // @match        https://*/*
 // @match        http://*/*
@@ -138,8 +138,7 @@
     button.innerHTML = [
       '<svg class="tm-imgfs-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none">',
       '<path d="M12 3v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
-      '</svg>',
-      '<span>Save</span>'
+      '</svg>'
     ].join('');
     button.addEventListener('click', onSaveClick, true);
     return button;
@@ -382,9 +381,8 @@
     style.id = STYLE_ID;
     const css = [
       '.' + HOST_CLASS + ' { position: relative !important; }',
-      '.' + BUTTON_CLASS + ' { all: unset; align-items: center; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); background: rgba(0, 0, 0, 0.66); border: 1px solid rgba(255, 255, 255, 0.24); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28); box-sizing: border-box; color: #ffffff; cursor: pointer; display: inline-flex; font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; gap: 5px; height: 28px; justify-content: center; padding: 0 10px; position: absolute; right: 10px; top: 10px; transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease, transform 120ms ease; user-select: none; white-space: nowrap; z-index: 2147483647; }',
+      '.' + BUTTON_CLASS + ' { all: unset; align-items: center; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); background: rgba(0, 0, 0, 0.66); border: 1px solid rgba(255, 255, 255, 0.24); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28); box-sizing: border-box; color: #ffffff; cursor: pointer; display: inline-flex; height: 32px; justify-content: center; padding: 0; position: absolute; right: 10px; top: 10px; transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease, transform 120ms ease; user-select: none; width: 32px; z-index: 2147483647; }',
       '.' + BUTTON_CLASS + ' svg { display: block; flex: 0 0 auto; height: 15px; pointer-events: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 3; width: 15px; }',
-      '.' + BUTTON_CLASS + ' span { pointer-events: none; }',
       '.' + BUTTON_CLASS + ':hover { background: rgba(29, 155, 240, 0.9); border-color: rgba(255, 255, 255, 0.45); }',
       '.' + BUTTON_CLASS + '--busy { opacity: 0.72; transform: scale(0.94); }',
       '.' + BUTTON_CLASS + '[data-imgfs-flash="done"] { background: rgba(0, 186, 124, 0.92); border-color: rgba(255, 255, 255, 0.5); }',
