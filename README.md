@@ -3,6 +3,7 @@
 
 Current scripts:
 
+- image-file-saver.user.js: automatically adds an upper-right Save overlay to images so iPhone Safari can save/share them as image files instead of only saving to Photos.
 - `chatgpt-auto-temporary-chat.user.js`: automatically enables temporary chat on ChatGPT.
 - `github-pr-patch-cleaner.user.js`: cleans noisy sections from GitHub PR `.patch` pages and raw patch URLs, replacing lockfiles and binary/non-text diffs with compact placeholders for easier LLM copy/paste.
 - `hackernews-reader-mode.user.js`: rewrites Hacker News item pages as a single clean article so iOS Safari Reader Mode can read the thread aloud, flattening nested comments with spoken parent attribution (e.g. "bob replying to alice").
