@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image File Saver
 // @namespace    local.image-file-saver
-// @version      0.2.2
+// @version      0.2.3
 // @description  Adds an upper-right Save button to web images so iPhone Safari can save/share them as image files instead of only adding them to Photos.
 // @match        https://*/*
 // @match        http://*/*
@@ -21,6 +21,7 @@
   const BUTTON_CLASS = 'tm-imgfs-button';
   const TOAST_CLASS = 'tm-imgfs-toast';
   const ENHANCED_ATTR = 'data-tm-imgfs-enhanced';
+  const LOAD_LISTENER_ATTR = 'data-tm-imgfs-load-listener';
   const MIN_IMAGE_SIZE = 80;
 
   const toastTimers = new WeakMap();
@@ -65,18 +66,42 @@
   }
 
   function enhanceImage(image) {
+    watchImageLoad(image);
     if (!image || !image.isConnected || !isUsableImage(image)) return;
 
     const host = findOverlayHost(image);
-    if (!host || host.getAttribute(ENHANCED_ATTR) === '1') return;
+    if (!host) return;
+
+    const existingButton = findExistingButton(host);
+    if (existingButton) {
+      updateButtonSource(existingButton, image);
+      return;
+    }
+
+    if (host.getAttribute(ENHANCED_ATTR) === '1') return;
 
     host.classList.add(HOST_CLASS);
     host.setAttribute(ENHANCED_ATTR, '1');
 
     const button = createButton();
-    button.dataset.sourceUrl = getImageUrl(image);
-    button.dataset.alt = image.alt || '';
+    updateButtonSource(button, image);
     host.append(button);
+  }
+
+  function watchImageLoad(image) {
+    if (!(image instanceof HTMLImageElement) || image.complete || image.getAttribute(LOAD_LISTENER_ATTR) === '1') return;
+    image.setAttribute(LOAD_LISTENER_ATTR, '1');
+    image.addEventListener('load', scheduleScan, { once: true });
+  }
+
+  function findExistingButton(host) {
+    return [...host.children].find(child => child.classList?.contains(BUTTON_CLASS)) || null;
+  }
+
+  function updateButtonSource(button, image) {
+    const url = getImageUrl(image);
+    if (url) button.dataset.sourceUrl = url;
+    button.dataset.alt = image.alt || '';
   }
 
   function isUsableImage(image) {
@@ -93,7 +118,7 @@
     const rect = node.getBoundingClientRect();
     if (rect.width < MIN_IMAGE_SIZE || rect.height < MIN_IMAGE_SIZE) return '';
 
-    const match = (getComputedStyle(node).backgroundImage || '').match(/^url\((['"]?)(.*?)\1\)$/);
+    const match = (getComputedStyle(node).backgroundImage || '').match(/url\((['"]?)(.*?)\1\)/);
     return match ? match[2] : '';
   }
 
@@ -152,7 +177,9 @@
     const button = event.currentTarget;
     const host = button.parentElement || document.body;
     const image = host.querySelector('img');
-    const url = button.dataset.sourceUrl || getImageUrl(image);
+    const liveUrl = getImageUrl(image);
+    const url = liveUrl || button.dataset.sourceUrl || '';
+    if (liveUrl) button.dataset.sourceUrl = liveUrl;
 
     if (!url) {
       flashButton(button, 'error');
@@ -205,7 +232,7 @@
       return;
     }
 
-    if (typeof navigator.share === 'function' && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+    if (canShareFile(file)) {
       await navigator.share({ files: [file], title: file.name });
       return;
     }
@@ -215,6 +242,16 @@
     } catch (error) {
       if (error?.name === 'AbortError') throw error;
       downloadBlob(file);
+    }
+  }
+
+  function canShareFile(file) {
+    if (typeof navigator.share !== 'function') return false;
+    if (typeof navigator.canShare !== 'function') return true;
+    try {
+      return navigator.canShare({ files: [file] });
+    } catch {
+      return false;
     }
   }
 
@@ -321,6 +358,7 @@
     if (ext === 'gif') return 'image/gif';
     if (ext === 'webp') return 'image/webp';
     if (ext === 'avif') return 'image/avif';
+    if (ext === 'svg') return 'image/svg+xml';
     if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
     return '';
   }
@@ -330,6 +368,7 @@
     if (/gif/i.test(mimeType)) return 'gif';
     if (/webp/i.test(mimeType)) return 'webp';
     if (/avif/i.test(mimeType)) return 'avif';
+    if (/svg/i.test(mimeType)) return 'svg';
     if (/jpe?g/i.test(mimeType)) return 'jpg';
     return '';
   }

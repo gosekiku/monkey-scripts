@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Native Share Button
 // @namespace    local.x.native-share-button
-// @version      1.1.1
+// @version      1.1.2
 // @description  Adds an inline native share button to X/Twitter posts and articles, sharing the post text and canonical URL through the OS share sheet.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -19,7 +19,7 @@
   var SCAN_DELAY_MS = 80;
   var scanTimer = null;
 
-  console.info(TAG, 'v1.1.1 ready');
+  console.info(TAG, 'v1.1.2 ready');
 
   function scheduleScan() {
     if (scanTimer !== null) return;
@@ -47,8 +47,7 @@
     var insertionPoint = findActionWrapper(shareButton);
     if (!insertionPoint || !insertionPoint.parentNode) return;
 
-    var existing = scope.querySelector('[' + BUTTON_ATTR + ']');
-    if (existing && existing.parentNode === insertionPoint.parentNode) return;
+    if (scope.querySelector('[' + BUTTON_ATTR + ']')) return;
 
     var nativeButton = createNativeShareButton(shareButton, article);
     insertionPoint.parentNode.insertBefore(nativeButton, insertionPoint.nextSibling);
@@ -133,14 +132,20 @@
   }
 
   function resetInteractiveState(root) {
+    resetNodeInteractiveState(root);
+
     var nodes = root.querySelectorAll('[id], [aria-expanded], [aria-haspopup], [data-testid]');
     for (var i = 0; i < nodes.length; i++) {
-      nodes[i].removeAttribute('id');
-      nodes[i].removeAttribute('aria-expanded');
-      nodes[i].removeAttribute('aria-haspopup');
-      if (nodes[i].getAttribute('data-testid') !== 'nativeShare') {
-        nodes[i].removeAttribute('data-testid');
-      }
+      resetNodeInteractiveState(nodes[i]);
+    }
+  }
+
+  function resetNodeInteractiveState(node) {
+    node.removeAttribute('id');
+    node.removeAttribute('aria-expanded');
+    node.removeAttribute('aria-haspopup');
+    if (node.getAttribute('data-testid') !== 'nativeShare') {
+      node.removeAttribute('data-testid');
     }
   }
 
@@ -165,7 +170,7 @@
 
     for (var i = 0; i < spans.length; i++) {
       var text = (spans[i].textContent || '').trim();
-      if (!text || /^share$/i.test(text) || /^\d+[KMB]?$/.test(text)) {
+      if (!text || /^share$/i.test(text) || /^\d+(?:[,.]\d+)?[KMB]?$/.test(text)) {
         spans[i].textContent = '';
       }
     }
@@ -209,11 +214,12 @@
     var url = resolvePostUrl(currentArticle) || stripTracking(location.href);
     var title = author || getArticleTitle() || 'X post';
 
-    return {
+    var shareData = {
       title: title,
-      text: text ? text + '\n\n' + url : url,
       url: url
     };
+    if (text) shareData.text = text;
+    return shareData;
   }
 
   function pickArticle() {
@@ -271,6 +277,12 @@
 
   function resolvePostUrl(article) {
     if (article) {
+      var timeLink = article.querySelector('time');
+      var canonicalLink = timeLink ? timeLink.closest('a[href*="/status/"]') : null;
+      if (canonicalLink) {
+        return stripTracking(canonicalLink.getAttribute('href') || canonicalLink.href || '');
+      }
+
       var links = article.querySelectorAll('a[href*="/status/"], a[href*="/article/"]');
 
       for (var i = 0; i < links.length; i++) {
@@ -298,6 +310,8 @@
       var url = new URL(rawUrl, location.origin);
       url.search = '';
       url.hash = '';
+      var statusMatch = url.pathname.match(/^(\/[^/]+\/status\/\d+)/);
+      if (statusMatch) url.pathname = statusMatch[1];
       return url.href;
     } catch (err) {
       return rawUrl;
@@ -365,7 +379,7 @@
   }
 
   function fallbackCopy(shareData) {
-    var text = shareData.text || shareData.url || '';
+    var text = joinParts([shareData.text, shareData.url]);
 
     if (!text) return;
 
