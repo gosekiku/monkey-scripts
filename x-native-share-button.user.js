@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X Native Share Button
 // @namespace    local.x.native-share-button
-// @version      1.1.0
+// @version      1.1.1
 // @description  Adds an inline native share button to X/Twitter posts and articles, sharing the post text and canonical URL through the OS share sheet.
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -19,7 +19,7 @@
   var SCAN_DELAY_MS = 80;
   var scanTimer = null;
 
-  console.info(TAG, 'v1.1.0 ready');
+  console.info(TAG, 'v1.1.1 ready');
 
   function scheduleScan() {
     if (scanTimer !== null) return;
@@ -156,7 +156,7 @@
     var ns = 'http://www.w3.org/2000/svg';
     var path = document.createElementNS(ns, 'path');
     path.setAttribute('fill', 'currentColor');
-    path.setAttribute('d', 'M12 3.25 7.75 7.5l1.06 1.06 2.44-2.44V15h1.5V6.12l2.44 2.44 1.06-1.06L12 3.25ZM5 11h3v1.5H5.5v6h13v-6H16V11h3a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z');
+    path.setAttribute('d', 'M12 3.4 7.72 7.68l1.06 1.06 2.47-2.47V14h1.5V6.27l2.47 2.47 1.06-1.06L12 3.4ZM7 11.5h1.5v-1H6.25C5.56 10.5 5 11.06 5 11.75v7C5 19.44 5.56 20 6.25 20h11.5c.69 0 1.25-.56 1.25-1.25v-7c0-.69-.56-1.25-1.25-1.25H15.5v1H17.5v7h-11v-7H7Z');
     svg.appendChild(path);
   }
 
