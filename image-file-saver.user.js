@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image File Saver
 // @namespace    local.image-file-saver
-// @version      0.2.6
+// @version      0.2.7
 // @description  Adds an upper-right Save button to web images so iPhone Safari can save/share them as image files instead of only adding them to Photos.
 // @match        https://*/*
 // @match        http://*/*
@@ -82,7 +82,7 @@
     const host = findOverlayHost(image);
     if (!host) return;
 
-    if (isDeferredXMediaHost(host)) {
+    if (shouldDeferXMedia(image, host)) {
       removeExistingButton(host);
       host.removeAttribute(ENHANCED_ATTR);
       host.classList.remove(HOST_CLASS);
@@ -188,17 +188,39 @@
     return sourceNode.parentElement instanceof HTMLElement ? sourceNode.parentElement : sourceNode;
   }
 
-  function isDeferredXMediaHost(host) {
+  function shouldDeferXMedia(image, host) {
     if (!isXSite() || !(host instanceof HTMLElement)) return false;
 
-    const mediaHost = host.closest('[data-testid="tweetPhoto"], [data-testid="card.layoutLarge.media"], [data-testid="card.layoutSmall.media"]') || host;
-    const text = (mediaHost.innerText || '').trim();
+    const sourceNode = getSourceElement(image);
+    const mediaHost = sourceNode instanceof Element
+      ? sourceNode.closest('[data-testid="tweetPhoto"], [data-testid="card.layoutLarge.media"], [data-testid="card.layoutSmall.media"]')
+      : host.closest('[data-testid="tweetPhoto"], [data-testid="card.layoutLarge.media"], [data-testid="card.layoutSmall.media"]');
+    if (!(mediaHost instanceof HTMLElement)) return false;
+
+    if (hasXLoadImageControl(mediaHost) || hasXLoadImageControl(mediaHost.closest('article'))) return true;
+
+    return !isRealXMediaUrl(getImageUrl(image));
+  }
+
+  function hasXLoadImageControl(root) {
+    if (!(root instanceof HTMLElement)) return false;
+
+    const text = (root.innerText || '').trim();
     if (!/\bLoad image\b/i.test(text)) return false;
 
-    const actionableLoadButton = [...mediaHost.querySelectorAll('button, [role="button"]')]
+    const actionableLoadButton = [...root.querySelectorAll('button, [role="button"]')]
       .some(control => /\bLoad image\b/i.test((control.innerText || control.getAttribute('aria-label') || '').trim()));
 
     return actionableLoadButton;
+  }
+
+  function isRealXMediaUrl(url) {
+    try {
+      const parsed = new URL(url, location.href);
+      return /(^|\.)pbs\.twimg\.com$/i.test(parsed.hostname) && /\/media\//.test(parsed.pathname);
+    } catch {
+      return false;
+    }
   }
 
   function isXSite() {
