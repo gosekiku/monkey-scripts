@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image File Saver
 // @namespace    local.image-file-saver
-// @version      0.2.5
+// @version      0.2.6
 // @description  Adds an upper-right Save button to web images so iPhone Safari can save/share them as image files instead of only adding them to Photos.
 // @match        https://*/*
 // @match        http://*/*
@@ -82,6 +82,13 @@
     const host = findOverlayHost(image);
     if (!host) return;
 
+    if (isDeferredXMediaHost(host)) {
+      removeExistingButton(host);
+      host.removeAttribute(ENHANCED_ATTR);
+      host.classList.remove(HOST_CLASS);
+      return;
+    }
+
     const existingButton = findExistingButton(host);
     if (existingButton) {
       updateButtonSource(existingButton, image);
@@ -108,6 +115,11 @@
 
   function findExistingButton(host) {
     return [...host.children].find(child => child.classList?.contains(BUTTON_CLASS)) || null;
+  }
+
+  function removeExistingButton(host) {
+    const button = findExistingButton(host);
+    if (button) button.remove();
   }
 
   function updateButtonSource(button, image) {
@@ -174,6 +186,23 @@
     }
 
     return sourceNode.parentElement instanceof HTMLElement ? sourceNode.parentElement : sourceNode;
+  }
+
+  function isDeferredXMediaHost(host) {
+    if (!isXSite() || !(host instanceof HTMLElement)) return false;
+
+    const mediaHost = host.closest('[data-testid="tweetPhoto"], [data-testid="card.layoutLarge.media"], [data-testid="card.layoutSmall.media"]') || host;
+    const text = (mediaHost.innerText || '').trim();
+    if (!/\bLoad image\b/i.test(text)) return false;
+
+    const actionableLoadButton = [...mediaHost.querySelectorAll('button, [role="button"]')]
+      .some(control => /\bLoad image\b/i.test((control.innerText || control.getAttribute('aria-label') || '').trim()));
+
+    return actionableLoadButton;
+  }
+
+  function isXSite() {
+    return /(^|\.)x\.com$/i.test(location.hostname) || /(^|\.)twitter\.com$/i.test(location.hostname);
   }
 
   function getSourceElement(image) {
