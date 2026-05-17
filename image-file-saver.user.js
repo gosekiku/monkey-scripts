@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image File Saver
 // @namespace    local.image-file-saver
-// @version      0.2.3
+// @version      0.2.4
 // @description  Adds an upper-right Save button to web images so iPhone Safari can save/share them as image files instead of only adding them to Photos.
 // @match        https://*/*
 // @match        http://*/*
@@ -75,6 +75,7 @@
     const existingButton = findExistingButton(host);
     if (existingButton) {
       updateButtonSource(existingButton, image);
+      updateButtonPlacement(existingButton, image, host);
       return;
     }
 
@@ -85,6 +86,7 @@
 
     const button = createButton();
     updateButtonSource(button, image);
+    updateButtonPlacement(button, image, host);
     host.append(button);
   }
 
@@ -102,6 +104,20 @@
     const url = getImageUrl(image);
     if (url) button.dataset.sourceUrl = url;
     button.dataset.alt = image.alt || '';
+  }
+
+  function updateButtonPlacement(button, image, host) {
+    const sourceNode = getSourceElement(image);
+    if (!(button instanceof HTMLElement) || !(host instanceof HTMLElement) || !sourceNode?.getBoundingClientRect) return;
+
+    const imageRect = sourceNode.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    if (!imageRect.width || !imageRect.height || !hostRect.width || !hostRect.height) return;
+
+    const top = clamp(imageRect.top - hostRect.top + 10, 10, Math.max(10, hostRect.height - 42));
+    const right = clamp(hostRect.right - imageRect.right + 10, 10, Math.max(10, hostRect.width - 42));
+    button.style.setProperty('--tm-imgfs-top', Math.round(top) + 'px');
+    button.style.setProperty('--tm-imgfs-right', Math.round(right) + 'px');
   }
 
   function isUsableImage(image) {
@@ -152,6 +168,10 @@
 
   function getSourceElement(image) {
     return image?.__tmImgFsVirtual ? image.parentElement : image;
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
   }
 
   function createButton() {
@@ -420,7 +440,7 @@
     style.id = STYLE_ID;
     const css = [
       '.' + HOST_CLASS + ' { position: relative !important; }',
-      '.' + BUTTON_CLASS + ' { all: unset; align-items: center; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); background: rgba(0, 0, 0, 0.66); border: 1px solid rgba(255, 255, 255, 0.24); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28); box-sizing: border-box; color: #ffffff; cursor: pointer; display: inline-flex; height: 32px; justify-content: center; padding: 0; position: absolute; right: 10px; top: 10px; transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease, transform 120ms ease; user-select: none; width: 32px; z-index: 2147483647; }',
+      '.' + BUTTON_CLASS + ' { all: unset; align-items: center; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); background: rgba(0, 0, 0, 0.66); border: 1px solid rgba(255, 255, 255, 0.24); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28); box-sizing: border-box; color: #ffffff; cursor: pointer; display: inline-flex; height: 32px; justify-content: center; padding: 0; position: absolute; right: var(--tm-imgfs-right, 10px); top: var(--tm-imgfs-top, 10px); transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease, transform 120ms ease; user-select: none; width: 32px; z-index: 2147483647; }',
       '.' + BUTTON_CLASS + ' svg { display: block; flex: 0 0 auto; height: 15px; pointer-events: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 3; width: 15px; }',
       '.' + BUTTON_CLASS + ':hover { background: rgba(29, 155, 240, 0.9); border-color: rgba(255, 255, 255, 0.45); }',
       '.' + BUTTON_CLASS + '--busy { opacity: 0.72; transform: scale(0.94); }',
